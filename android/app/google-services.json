@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "923531830228",
+    "project_id": "simple-project-fcm-2a68d",
+    "storage_bucket": "simple-project-fcm-2a68d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:923531830228:android:fc22f4170e6f916bb02c41",
+        "android_client_info": {
+          "package_name": "cpe.ict.up.simple"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC1aHHD6InihWeauxasIJr4jgGIEkiyHls"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
