@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
+import 'package:application_farmacc/services/supabase_service.dart';
 
-// 1. สร้าง Model เพื่อช่วยในการกรองข้อมูล
+// Model สำหรับแสดงผล
 class TransactionData {
   final IconData icon;
   final String title;
   final String subtitle;
   final String? tag;
   final String amount;
+  final double rawAmount; // เก็บค่าตัวเลขดิบไว้คำนวณกราฟ
   final bool isIncome;
   final String dateGroup;
+  final DateTime date;
 
   TransactionData({
     required this.icon,
@@ -17,8 +20,10 @@ class TransactionData {
     required this.subtitle,
     this.tag,
     required this.amount,
+    required this.rawAmount,
     required this.isIncome,
     required this.dateGroup,
+    required this.date,
   });
 }
 
@@ -30,54 +35,92 @@ class AllTransactionsPage extends StatefulWidget {
 }
 
 class _AllTransactionsPageState extends State<AllTransactionsPage> {
-  // 2. ตัวแปรเก็บสถานะการกรอง (all, income, expense)
+  final _service = SupabaseService();
+  
+  // สถานะการกรอง (all, income, expense)
   String _filterStatus = 'all';
+  bool _isLoading = true;
 
-  // 3. รวมรายการข้อมูลทั้งหมดไว้ใน List เดียวเพื่อให้ง่ายต่อการกรอง
-  final List<TransactionData> _allTransactions = [
-    TransactionData(
-      icon: Icons.agriculture,
-      title: 'ขายข้าวหอมมะลิ',
-      subtitle: '500 กก. • 14:30 น.',
-      tag: 'ผลผลิต',
-      amount: '+฿8,500',
-      isIncome: true,
-      dateGroup: 'วันนี้, 12 ต.ค.',
-    ),
-    TransactionData(
-      icon: Icons.compost,
-      title: 'ซื้อปุ๋ยเคมี',
-      subtitle: 'ร้านลุงแดง • 10:15 น.',
-      amount: '-฿1,200',
-      isIncome: false,
-      dateGroup: 'วันนี้, 12 ต.ค.',
-    ),
-    TransactionData(
-      icon: Icons.eco,
-      title: 'ขายผลไม้ (ทุเรียน)',
-      subtitle: '200 กก. • 16:45 น.',
-      tag: 'ผลผลิต',
-      amount: '+฿12,000',
-      isIncome: true,
-      dateGroup: 'เมื่อวาน, 11 ต.ค.',
-    ),
-    TransactionData(
-      icon: Icons.engineering,
-      title: 'ค่าจ้างคนงาน',
-      subtitle: '3 คน • 17:00 น.',
-      amount: '-฿1,500',
-      isIncome: false,
-      dateGroup: 'เมื่อวาน, 11 ต.ค.',
-    ),
-    TransactionData(
-      icon: Icons.local_gas_station,
-      title: 'ค่าน้ำมันรถไถ',
-      subtitle: 'ปั๊ม PT • 08:30 น.',
-      amount: '-฿800',
-      isIncome: false,
-      dateGroup: 'เมื่อวาน, 11 ต.ค.',
-    ),
-  ];
+  // รายการข้อมูลที่ดึงมาจาก Supabase
+  List<TransactionData> _allTransactions = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchData();
+  }
+
+  // ✅ ฟังก์ชันดึงและแปลงข้อมูลจาก Supabase
+  Future<void> _fetchData() async {
+    try {
+      // ดึงข้อมูลทั้งหมด
+      final data = await _service.getTransactions();
+      
+      List<TransactionData> loadedData = data.map((item) {
+        final bool isIncome = item['type'] == 'income';
+        // แปลงค่าตัวเลขให้ปลอดภัย (รองรับทั้ง int และ double)
+        final double amount = (item['amount'] as num).toDouble();
+        final String category = item['category'] ?? 'ทั่วไป';
+        final String desc = item['description'] ?? '';
+        final DateTime date = DateTime.parse(item['transaction_date']);
+        
+        return TransactionData(
+          icon: _getIconByCategory(category), 
+          title: category,
+          subtitle: desc.isNotEmpty ? '$desc • ${DateFormat('HH:mm').format(date)} น.' : DateFormat('HH:mm น.').format(date),
+          tag: isIncome ? 'รายรับ' : null,
+          amount: '${isIncome ? '+' : '-'}฿${NumberFormat('#,###').format(amount)}',
+          rawAmount: amount,
+          isIncome: isIncome,
+          dateGroup: _getDateGroup(date), 
+          date: date,
+        );
+      }).toList();
+
+      if (mounted) {
+        setState(() {
+          _allTransactions = loadedData;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+      print('Error fetching transactions: $e');
+    }
+  }
+
+  // Helper: เลือกไอคอนตามหมวดหมู่
+  IconData _getIconByCategory(String category) {
+    if (category.contains('ข้าว')) return Icons.grass;
+    if (category.contains('ปุ๋ย')) return Icons.compost;
+    if (category.contains('น้ำมัน')) return Icons.local_gas_station;
+    if (category.contains('แรงงาน')) return Icons.engineering;
+    if (category.contains('ผลไม้') || category.contains('ทุเรียน')) return Icons.eco;
+    return Icons.paid; // Default icon
+  }
+
+  // Helper: จัดกลุ่มวันที่
+  String _getDateGroup(DateTime date) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = today.subtract(const Duration(days: 1));
+    final checkDate = DateTime(date.year, date.month, date.day);
+
+    if (checkDate == today) return 'วันนี้, ${DateFormat('d MMM', 'th').format(date)}';
+    if (checkDate == yesterday) return 'เมื่อวาน, ${DateFormat('d MMM', 'th').format(date)}';
+    return DateFormat('d MMM yyyy', 'th').format(date);
+  }
+
+  // Helper: คำนวณยอดรวม
+  Map<String, double> _calculateStats() {
+    double income = 0;
+    double expense = 0;
+    for (var t in _allTransactions) {
+      if (t.isIncome) income += t.rawAmount;
+      else expense += t.rawAmount;
+    }
+    return {'income': income, 'expense': expense, 'net': income - expense};
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -93,12 +136,15 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
     final Color textMain = isDark ? Colors.white : const Color(0xFF111811);
     final Color textSecondary = isDark ? Colors.grey[400]! : Colors.grey[600]!;
 
-    // 4. ทำการกรองข้อมูลตามสถานะที่เลือก
+    // กรองข้อมูลตามสถานะที่เลือก
     List<TransactionData> displayList = _allTransactions.where((item) {
       if (_filterStatus == 'income') return item.isIncome;
       if (_filterStatus == 'expense') return !item.isIncome;
-      return true; // ถ้าเป็น 'all' ให้แสดงทั้งหมด
+      return true;
     }).toList();
+
+    // จัดกลุ่มข้อมูลตาม dateGroup เพื่อแสดง Header
+    List<String> groups = displayList.map((e) => e.dateGroup).toSet().toList();
 
     return Scaffold(
       backgroundColor: isDark ? backgroundDark : backgroundLight,
@@ -112,61 +158,81 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
         ),
         actions: [
           IconButton(
-            icon: Icon(Icons.search, color: textMain),
-            onPressed: () {},
+            icon: Icon(Icons.refresh, color: textMain),
+            onPressed: () {
+              setState(() => _isLoading = true);
+              _fetchData(); 
+            },
           ),
         ],
-        shape: Border(bottom: BorderSide(color: isDark ? Colors.white10 : Colors.black.withOpacity(0.05))),
-      ),
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildStatsOverview(isDark, surfaceLight, surfaceDark, primaryColor, roseColor, textMain, textSecondary),
-            
-            // 5. ส่วน Filter Chips (ปรับปรุงให้กดเลือกได้)
-            _buildFilterChips(isDark, surfaceLight, surfaceDark, primaryColor, textMain),
-
-            // 6. ส่วนแสดงรายการข้อมูล (Loop ตาม displayList ที่กรองแล้ว)
-            if (displayList.isEmpty)
-              Padding(
-                padding: const EdgeInsets.all(40.0),
-                child: Center(child: Text('ไม่มีรายการ', style: TextStyle(color: textSecondary))),
-              ),
-
-            ...displayList.map((item) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildSectionHeader(item.dateGroup, textSecondary),
-                  _buildTransactionItem(
-                    icon: item.icon,
-                    title: item.title,
-                    subtitle: item.subtitle,
-                    tag: item.tag,
-                    amount: item.amount,
-                    isIncome: item.isIncome,
-                    isDark: isDark,
-                    primaryColor: const Color.fromARGB(255, 42, 157, 42),
-                  ),
-                ],
-              );
-            }).toList(),
-
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 32),
-                child: Text('สิ้นสุดรายการ', style: TextStyle(color: Colors.grey, fontSize: 13)),
-              ),
-            ),
-            const SizedBox(height: 100),
-          ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1.0),
+          child: Container(color: isDark ? Colors.white10 : Colors.black.withOpacity(0.05), height: 1.0),
         ),
       ),
+      body: _isLoading 
+        ? const Center(child: CircularProgressIndicator(color: primaryColor))
+        : SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ส่วนแสดงสถิติ
+              Builder(
+                builder: (context) {
+                  final stats = _calculateStats();
+                  return _buildStatsOverview(
+                    isDark, surfaceLight, surfaceDark, primaryColor, roseColor, textMain, textSecondary,
+                    stats['net']!, stats['income']!, stats['expense']!
+                  );
+                }
+              ),
+              
+              // ส่วน Filter Chips
+              _buildFilterChips(isDark, surfaceLight, surfaceDark, primaryColor, textMain),
+
+              // ส่วนแสดงรายการข้อมูล
+              if (displayList.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(40.0),
+                  child: Center(child: Text('ไม่มีรายการ', style: TextStyle(color: textSecondary))),
+                ),
+
+              // Loop แสดงผลตามกลุ่มวันที่
+              ...groups.map((group) {
+                final itemsInGroup = displayList.where((i) => i.dateGroup == group).toList();
+                
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildSectionHeader(group, textSecondary),
+                    ...itemsInGroup.map((item) => _buildTransactionItem(
+                      icon: item.icon,
+                      title: item.title,
+                      subtitle: item.subtitle,
+                      tag: item.tag,
+                      amount: item.amount,
+                      isIncome: item.isIncome,
+                      isDark: isDark,
+                      primaryColor: const Color.fromARGB(255, 42, 157, 42),
+                    )),
+                  ],
+                );
+              }),
+
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 32),
+                  child: Text('สิ้นสุดรายการ', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                ),
+              ),
+              const SizedBox(height: 100),
+            ],
+          ),
+        ),
     );
   }
 
-  // --- Widgets ย่อย (คงเดิมและปรับปรุงฟังก์ชันกด) ---
+  // --- Widgets ย่อย ---
 
   Widget _buildFilterChips(bool isDark, Color light, Color dark, Color primary, Color textMain) {
     return SingleChildScrollView(
@@ -174,30 +240,20 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Row(
         children: [
-          _buildChip(Icons.calendar_month, 'เดือนนี้', isDark, light, dark, isSelected: false, hasDropdown: true),
-          const SizedBox(width: 8),
-          // ปุ่ม "ทั้งหมด"
           _buildSelectableChip('ทั้งหมด', 'all', isDark, primary),
           const SizedBox(width: 8),
-          // ปุ่ม "รายรับ"
           _buildSelectableChip('รายรับ', 'income', isDark, primary),
           const SizedBox(width: 8),
-          // ปุ่ม "รายจ่าย"
           _buildSelectableChip('รายจ่าย', 'expense', isDark, Colors.red),
         ],
       ),
     );
   }
 
-  // Widget สำหรับปุ่มที่กดเลือกได้จริง
   Widget _buildSelectableChip(String label, String value, bool isDark, Color activeColor) {
     bool isSelected = _filterStatus == value;
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          _filterStatus = value;
-        });
-      },
+      onTap: () => setState(() => _filterStatus = value),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
@@ -217,28 +273,15 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
     );
   }
 
-  // คง Widget เดิมไว้ตามโครงสร้างที่คุณส่งมา
-  Widget _buildChip(IconData? icon, String label, bool isDark, Color light, Color dark, {bool isSelected = false, bool hasDropdown = false}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: isSelected ? light : (isDark ? dark : light),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: isSelected ? Colors.transparent : (isDark ? Colors.white10 : Colors.grey[300]!)),
-      ),
-      child: Row(
-        children: [
-          if (icon != null) ...[Icon(icon, size: 16, color: isDark ? Colors.white : Colors.black), const SizedBox(width: 6)],
-          Text(label, style: TextStyle(fontSize: 13, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500, color: isDark ? Colors.white : Colors.black)),
-          if (hasDropdown) ...[const SizedBox(width: 4), const Icon(Icons.expand_more, size: 16, color: Colors.grey)],
-        ],
-      ),
-    );
-  }
+  Widget _buildStatsOverview(
+    bool isDark, Color light, Color dark, Color primary, Color rose, Color text, Color secText,
+    double netProfit, double income, double expense
+  ) {
+    double total = income + expense;
+    int incomeFlex = total == 0 ? 5 : ((income / total) * 10).round();
+    int expenseFlex = total == 0 ? 5 : 10 - incomeFlex;
+    if (incomeFlex == 0 && expense > 0) { incomeFlex = 1; expenseFlex = 9; }
 
-  // --- ส่วนอื่นๆ คงเนื้อหาเดิมไว้ทั้งหมด ---
-
-  Widget _buildStatsOverview(bool isDark, Color light, Color dark, Color primary, Color rose, Color text, Color secText) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -256,19 +299,22 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('กำไรสุทธิ (เดือนนี้)', style: TextStyle(color: secText, fontSize: 14, fontWeight: FontWeight.w500)),
-                    Icon(Icons.trending_up, color: primary, size: 20),
+                    Text('กำไรสุทธิ (ทั้งหมด)', style: TextStyle(color: secText, fontSize: 14, fontWeight: FontWeight.w500)),
+                    Icon(Icons.trending_up, color: netProfit >= 0 ? primary : rose, size: 20),
                   ],
                 ),
                 const SizedBox(height: 8),
-                Text('+฿15,000', style: TextStyle(color: text, fontSize: 32, fontWeight: FontWeight.w900)),
+                Text(
+                  '${netProfit >= 0 ? '+' : ''}฿${NumberFormat('#,###').format(netProfit)}', 
+                  style: TextStyle(color: text, fontSize: 32, fontWeight: FontWeight.w900)
+                ),
                 const SizedBox(height: 20),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(99),
                   child: Row(
                     children: [
-                      Expanded(flex: 7, child: Container(height: 10, color: primary)),
-                      Expanded(flex: 3, child: Container(height: 10, color: rose)),
+                      Expanded(flex: incomeFlex, child: Container(height: 10, color: primary)),
+                      Expanded(flex: expenseFlex, child: Container(height: 10, color: rose)),
                     ],
                   ),
                 ),
@@ -276,8 +322,8 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _buildIndicator('รายรับ 70%', primary, secText),
-                    _buildIndicator('รายจ่าย 30%', rose, secText),
+                    _buildIndicator('รายรับ ${total == 0 ? 0 : ((income/total)*100).round()}%', primary, secText),
+                    _buildIndicator('รายจ่าย ${total == 0 ? 0 : ((expense/total)*100).round()}%', rose, secText),
                   ],
                 ),
               ],
@@ -286,9 +332,9 @@ class _AllTransactionsPageState extends State<AllTransactionsPage> {
           const SizedBox(height: 12),
           Row(
             children: [
-              _buildMiniStatCard('รายรับ', '฿25,000', Icons.arrow_downward, primary, isDark, light, dark),
+              _buildMiniStatCard('รายรับ', '฿${NumberFormat('#,###').format(income)}', Icons.arrow_downward, primary, isDark, light, dark),
               const SizedBox(width: 12),
-              _buildMiniStatCard('รายจ่าย', '฿10,000', Icons.arrow_upward, rose, isDark, light, dark),
+              _buildMiniStatCard('รายจ่าย', '฿${NumberFormat('#,###').format(expense)}', Icons.arrow_upward, rose, isDark, light, dark),
             ],
           ),
         ],

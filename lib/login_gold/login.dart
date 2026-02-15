@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:simple/main_dashbord/main.dart';
-import 'package:simple/login_gold/register.dart';
-import 'package:simple/login_gold/forgot.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+// ✅ อัปเดต import ให้ตรงกับโครงสร้างไฟล์
+import 'package:application_farmacc/main_dashbord/main.dart'; 
+import 'package:application_farmacc/login_gold/register.dart';
+import 'package:application_farmacc/login_gold/forgot.dart';
+// ✅ อย่าลืมสร้างไฟล์นี้ตามที่ผมให้ไปก่อนหน้านี้นะครับ
+import 'package:application_farmacc/login_gold/change_password.dart'; 
 
 void main() {
   runApp(const KasetTrackApp());
@@ -13,12 +18,6 @@ class KasetTrackApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // กำหนดสี Slate แบบ Tailwind
-    const slate900 = Color(0xFF0f172a);
-    const slate500 = Color(0xFF64748b);
-    const slate400 = Color(0xFF94a3b8);
-    const slate200 = Color(0xFFe2e8f0);
-
     return MaterialApp(
       title: 'KasetTrack',
       debugShowCheckedModeBanner: false,
@@ -26,7 +25,6 @@ class KasetTrackApp extends StatelessWidget {
         brightness: Brightness.light,
         primaryColor: const Color(0xFF13ec13),
         scaffoldBackgroundColor: const Color(0xFFf6f8f6),
-        // ใช้ GoogleFonts และจัดการ fallback กรณีโหลด font ไม่ขึ้น
         textTheme: GoogleFonts.notoSansThaiTextTheme(),
       ),
       darkTheme: ThemeData(
@@ -51,13 +49,96 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   bool _isObscure = true;
+  bool _isLoading = false; 
 
-  // ประกาศสี Slate สำหรับเรียกใช้ในหน้านี้
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+
   final Color slate900 = const Color(0xFF0f172a);
   final Color slate700 = const Color(0xFF334155);
   final Color slate500 = const Color(0xFF64748b);
   final Color slate400 = const Color(0xFF94a3b8);
   final Color slate200 = const Color(0xFFe2e8f0);
+
+  // ✅✅✅ เพิ่มส่วนนี้: ดักจับลิงก์จากอีเมล ✅✅✅
+  @override
+  void initState() {
+    super.initState();
+    _setupAuthListener();
+  }
+
+  void _setupAuthListener() {
+    // ดักฟังเหตุการณ์ Auth
+    Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      final event = data.event;
+      
+      // ถ้าเป็นเหตุการณ์ "กู้คืนรหัสผ่าน" (Password Recovery)
+      if (event == AuthChangeEvent.passwordRecovery) {
+        if (mounted) {
+          // พาไปหน้าตั้งรหัสผ่านใหม่
+          Navigator.push(
+            context, 
+            MaterialPageRoute(builder: (context) => const ChangePasswordPage())
+          );
+        }
+      }
+    });
+  }
+  // ✅✅✅ จบส่วนที่เพิ่ม ✅✅✅
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleLogin() async {
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('กรุณากรอกอีเมลและรหัสผ่าน')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final AuthResponse res = await Supabase.instance.client.auth.signInWithPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
+
+      if (mounted && res.user != null) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => const FarmerDashboard(),
+          ),
+        );
+      }
+    } on AuthException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('เข้าสู่ระบบไม่สำเร็จ: ${e.message}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('เกิดข้อผิดพลาด: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -72,7 +153,6 @@ class _LoginPageState extends State<LoginPage> {
             children: [
               const SizedBox(height: 60),
 
-              // Logo
               Center(
                 child: Container(
                   width: 80,
@@ -108,13 +188,15 @@ class _LoginPageState extends State<LoginPage> {
               ),
               const SizedBox(height: 40),
 
-              _buildLabel("ชื่อผู้ใช้ / เบอร์โทรศัพท์", isDark),
+              _buildLabel("อีเมล", isDark),
               const SizedBox(height: 8),
               TextField(
+                controller: _emailController,
                 style: TextStyle(color: isDark ? Colors.white : slate900),
+                keyboardType: TextInputType.emailAddress,
                 decoration: _inputDecoration(
-                  hint: "กรอกเบอร์โทรศัพท์ของคุณ",
-                  prefixIcon: Icons.person_outline,
+                  hint: "กรอกอีเมลของคุณ",
+                  prefixIcon: Icons.email_outlined,
                   isDark: isDark,
                 ),
               ),
@@ -123,30 +205,29 @@ class _LoginPageState extends State<LoginPage> {
               _buildLabel("รหัสผ่าน", isDark),
               const SizedBox(height: 8),
               TextField(
+                controller: _passwordController,
                 obscureText: _isObscure,
                 style: TextStyle(color: isDark ? Colors.white : slate900),
-                decoration:
-                    _inputDecoration(
-                      hint: "กรอกรหัสผ่าน",
-                      prefixIcon: Icons.lock_outline,
-                      isDark: isDark,
-                    ).copyWith(
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _isObscure ? Icons.visibility_off : Icons.visibility,
-                          color: slate400,
-                        ),
-                        onPressed: () =>
-                            setState(() => _isObscure = !_isObscure),
-                      ),
+                decoration: _inputDecoration(
+                  hint: "กรอกรหัสผ่าน",
+                  prefixIcon: Icons.lock_outline,
+                  isDark: isDark,
+                ).copyWith(
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _isObscure ? Icons.visibility_off : Icons.visibility,
+                      color: slate400,
                     ),
+                    onPressed: () =>
+                        setState(() => _isObscure = !_isObscure),
+                  ),
+                ),
               ),
 
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
                   onPressed: () {
-                    // ✅ เพิ่มโค้ดส่วนนี้เข้าไป
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -169,15 +250,7 @@ class _LoginPageState extends State<LoginPage> {
                 width: double.infinity,
                 height: 56,
                 child: ElevatedButton(
-                  onPressed: () {
-                    // ✅ เพิ่มโค้ดส่วนนี้เข้าไป
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => const FarmerDashboard(),
-                      ),
-                    );
-                  },
+                  onPressed: _isLoading ? null : _handleLogin,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: primaryColor,
                     foregroundColor: const Color(0xFF102210),
@@ -186,10 +259,16 @@ class _LoginPageState extends State<LoginPage> {
                     ),
                     elevation: 0,
                   ),
-                  child: const Text(
-                    'เข้าสู่ระบบ',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
+                  child: _isLoading 
+                    ? const SizedBox(
+                        height: 24, 
+                        width: 24, 
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+                      )
+                    : const Text(
+                        'เข้าสู่ระบบ',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
                 ),
               ),
 
@@ -219,7 +298,6 @@ class _LoginPageState extends State<LoginPage> {
                 height: 56,
                 child: OutlinedButton(
                   onPressed: () {
-                    // ✅ เพิ่มคำสั่ง Navigator ตรงนี้
                     Navigator.push(
                       context,
                       MaterialPageRoute(

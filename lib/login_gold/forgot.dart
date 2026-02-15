@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ForgotPasswordPage extends StatefulWidget {
   const ForgotPasswordPage({super.key});
@@ -9,7 +10,7 @@ class ForgotPasswordPage extends StatefulWidget {
 }
 
 class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
-  // สีกำหนดเองตาม Tailwind Config ที่คุณให้มา
+  // สีกำหนดเองตาม Tailwind Config
   static const Color primaryColor = Color(0xFF13ec13);
   static const Color backgroundLight = Color(0xFFf6f8f6);
   static const Color backgroundDark = Color(0xFF102210);
@@ -17,9 +18,84 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   static const Color borderLight = Color(0xFFdbe6db);
   static const Color borderDark = Color(0xFF2A402A);
 
+  // ตัวแปรรับค่าและสถานะโหลด
+  final _emailController = TextEditingController();
+  bool _isLoading = false;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  // ✅ ฟังก์ชันส่งอีเมลรีเซ็ตรหัสผ่าน (แก้ไขแล้ว)
+  Future<void> _handleResetPassword() async {
+    if (_emailController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('กรุณากรอกอีเมลที่ใช้ลงทะเบียน')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      // ✅ ส่งคำขอไปที่ Supabase พร้อมระบุ redirectTo
+      await Supabase.instance.client.auth.resetPasswordForEmail(
+        _emailController.text.trim(),
+        redirectTo: 'farmacc://reset-callback', // ✅ ใส่บรรทัดนี้สำคัญมาก!
+      );
+
+      if (mounted) {
+        // แสดง Dialog สำเร็จ
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            backgroundColor: Theme.of(context).brightness == Brightness.dark ? surfaceDark : Colors.white,
+            title: Text(
+              'ตรวจสอบอีเมลของคุณ',
+              style: TextStyle(
+                color: Theme.of(context).brightness == Brightness.dark ? Colors.white : Colors.black
+              ),
+            ),
+            content: Text(
+              'เราได้ส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ไปที่ ${_emailController.text} แล้ว\n\nกรุณาตรวจสอบ Inbox หรือ Junk/Spam',
+              style: TextStyle(
+                color: Theme.of(context).brightness == Brightness.dark ? Colors.grey[300] : Colors.black87
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context); // ปิด Dialog
+                  Navigator.pop(context); // กลับไปหน้า Login
+                },
+                child: const Text('ตกลง', style: TextStyle(color: primaryColor, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+      }
+    } on AuthException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('เกิดข้อผิดพลาด: ${e.message}'), backgroundColor: Colors.red),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // ตรวจสอบว่าเป็น Dark Mode หรือไม่
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
@@ -64,7 +140,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                       ],
                     ),
                     child: const Icon(
-                      Icons.spa, // แทนสัญลักษณ์ Material "spa" (ใบไม้)
+                      Icons.lock_reset,
                       color: primaryColor,
                       size: 48,
                     ),
@@ -85,7 +161,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
 
                 // Body Text
                 Text(
-                  'ไม่ต้องกังวล กรุณากรอกอีเมลหรือเบอร์โทรศัพท์ที่คุณใช้ลงทะเบียน เพื่อรับลิงก์สำหรับตั้งค่ารหัสผ่านใหม่',
+                  'ไม่ต้องกังวล กรุณากรอกอีเมลที่คุณใช้ลงทะเบียน เพื่อรับลิงก์สำหรับตั้งค่ารหัสผ่านใหม่',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.notoSansThai(
                     fontSize: 16,
@@ -102,7 +178,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                     Padding(
                       padding: const EdgeInsets.only(left: 4, bottom: 8),
                       child: Text(
-                        'อีเมลหรือเบอร์โทรศัพท์',
+                        'อีเมล',
                         style: GoogleFonts.notoSansThai(
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
@@ -111,7 +187,9 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                       ),
                     ),
                     TextField(
+                      controller: _emailController,
                       style: TextStyle(color: isDark ? Colors.white : Colors.black),
+                      keyboardType: TextInputType.emailAddress,
                       decoration: InputDecoration(
                         hintText: 'example@mail.com',
                         hintStyle: TextStyle(color: isDark ? const Color(0xFF4A634A) : const Color(0xFF618961).withOpacity(0.6)),
@@ -142,9 +220,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                   width: double.infinity,
                   height: 56,
                   child: ElevatedButton(
-                    onPressed: () {
-                      // Logic สำหรับการส่งรีเซ็ตรหัสผ่าน
-                    },
+                    onPressed: _isLoading ? null : _handleResetPassword,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: primaryColor,
                       foregroundColor: const Color(0xFF0a1f0a),
@@ -153,14 +229,21 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                       ),
                       elevation: 4,
                       shadowColor: primaryColor.withOpacity(0.3),
+                      disabledBackgroundColor: primaryColor.withOpacity(0.5),
                     ),
-                    child: Text(
-                      'รีเซ็ตรหัสผ่าน',
-                      style: GoogleFonts.notoSansThai(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+                    child: _isLoading 
+                      ? const SizedBox(
+                          width: 24, 
+                          height: 24, 
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)
+                        )
+                      : Text(
+                          'ส่งลิงก์รีเซ็ตรหัสผ่าน',
+                          style: GoogleFonts.notoSansThai(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                   ),
                 ),
                 const SizedBox(height: 40),

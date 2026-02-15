@@ -1,20 +1,15 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/intl.dart';
 
 // แพ็กเกจสำหรับการทำ PDF
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
-void main() {
-  runApp(MaterialApp(
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData(brightness: Brightness.light),
-    darkTheme: ThemeData(brightness: Brightness.dark),
-    home: const SummaryReportPage(),
-  ));
-}
+// Service Supabase
+import 'package:application_farmacc/services/supabase_service.dart';
 
 class SummaryReportPage extends StatefulWidget {
   const SummaryReportPage({super.key});
@@ -24,8 +19,18 @@ class SummaryReportPage extends StatefulWidget {
 }
 
 class _SummaryReportPageState extends State<SummaryReportPage> {
-  String _selectedPeriod = 'monthly'; // 'monthly' หรือ 'yearly'
+  final _service = SupabaseService();
   
+  String _selectedPeriod = 'monthly'; // 'monthly' หรือ 'yearly'
+  int _selectedYear = DateTime.now().year; // ปีที่เลือกดู
+  bool _isLoading = true;
+
+  // ตัวแปรเก็บข้อมูล
+  double _income = 0;
+  double _expense = 0;
+  double _profit = 0;
+  Map<int, double> _monthlyIncomeMap = {}; // เก็บรายรับรายเดือนสำหรับกราฟ
+
   // --- Color Palette ---
   static const Color primaryColor = Color(0xFF13ec13);
   static const Color dangerColor = Color(0xFFef4444);
@@ -33,13 +38,82 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
   static const Color backgroundDark = Color(0xFF102210);
   static const Color cardDark = Color(0xFF1a2e1a);
 
-  // --- ฟังก์ชันสร้าง PDF ---
+  @override
+  void initState() {
+    super.initState();
+    _fetchData();
+  }
+
+  // ✅ ฟังก์ชันดึงและคำนวณข้อมูลจริง
+  Future<void> _fetchData() async {
+    setState(() => _isLoading = true);
+
+    DateTime startDate;
+    DateTime endDate;
+    final now = DateTime.now();
+
+    if (_selectedPeriod == 'monthly') {
+      // รายเดือน: เอาเดือนปัจจุบันของปีที่เลือก
+      startDate = DateTime(_selectedYear, now.month, 1);
+      // หาวันสุดท้ายของเดือน
+      endDate = DateTime(_selectedYear, now.month + 1, 0, 23, 59, 59);
+    } else {
+      // รายปี: ทั้งปีมกรา - ธันวา
+      startDate = DateTime(_selectedYear, 1, 1);
+      endDate = DateTime(_selectedYear, 12, 31, 23, 59, 59);
+    }
+
+    try {
+      // 1. ดึงข้อมูลตามช่วงเวลาสำหรับแสดงตัวเลขรวม
+      final transactions = await _service.getTransactions(startDate: startDate, endDate: endDate);
+      
+      double inc = 0;
+      double exp = 0;
+      for (var t in transactions) {
+        double amount = (t['amount'] as num).toDouble();
+        if (t['type'] == 'income') inc += amount;
+        else exp += amount;
+      }
+
+      // 2. ดึงข้อมูลทั้งปีสำหรับทำกราฟ (เฉพาะตอนเลือกรายปี หรือเพื่อโชว์เทรนด์)
+      final yearData = await _service.getTransactions(
+        startDate: DateTime(_selectedYear, 1, 1),
+        endDate: DateTime(_selectedYear, 12, 31, 23, 59, 59)
+      );
+      
+      Map<int, double> monthlyMap = {};
+      for (var t in yearData) {
+        if (t['type'] == 'income') {
+          DateTime d = DateTime.parse(t['transaction_date']);
+          // รวมยอดตามเดือน (1-12)
+          monthlyMap[d.month] = (monthlyMap[d.month] ?? 0) + (t['amount'] as num).toDouble();
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _income = inc;
+          _expense = exp;
+          _profit = inc - exp;
+          _monthlyIncomeMap = monthlyMap;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+      print('Error: $e');
+    }
+  }
+
+  // --- ฟังก์ชันสร้าง PDF (ใช้ข้อมูลจริง) ---
   Future<void> _exportToPdf() async {
     final pdf = pw.Document();
     
-    // โหลด Font ภาษาไทยสำหรับ PDF (สำคัญมาก)
-    final ThaiFontRegular = await PdfGoogleFonts.promptRegular();
-    final ThaiFontBold = await PdfGoogleFonts.promptBold();
+    // โหลด Font ไทยจาก Google Fonts โดยตรงเพื่อให้แสดงผลใน PDF ได้
+    final thaiFontRegular = await PdfGoogleFonts.sarabunRegular();
+    final thaiFontBold = await PdfGoogleFonts.sarabunBold();
+
+    final formatCurrency = NumberFormat('#,###.00');
 
     pdf.addPage(
       pw.Page(
@@ -51,14 +125,14 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  pw.Text('รายงานสรุปผลประกอบการ', style: pw.TextStyle(font: ThaiFontBold, fontSize: 22)),
-                  pw.Text(DateTime.now().toString().split(' ')[0], style: pw.TextStyle(font: ThaiFontRegular, fontSize: 12)),
+                  pw.Text('รายงานสรุปผลประกอบการ', style: pw.TextStyle(font: thaiFontBold, fontSize: 22)),
+                  pw.Text(DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now()), style: pw.TextStyle(font: thaiFontRegular, fontSize: 12)),
                 ],
               ),
               pw.SizedBox(height: 10),
               pw.Text(
-                _selectedPeriod == 'monthly' ? 'ประเภท: รายเดือน (ตุลาคม 2566)' : 'ประเภท: รายปี (2566)',
-                style: pw.TextStyle(font: ThaiFontRegular, fontSize: 16),
+                'ประจำปี $_selectedYear (${_selectedPeriod == 'monthly' ? 'เดือนปัจจุบัน' : 'ทั้งปี'})',
+                style: pw.TextStyle(font: thaiFontRegular, fontSize: 16),
               ),
               pw.Divider(thickness: 1),
               pw.SizedBox(height: 20),
@@ -72,26 +146,26 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
                 ),
                 child: pw.Column(
                   children: [
-                    _pdfRow('กำไรสุทธิ', _selectedPeriod == 'monthly' ? '35,000' : '420,000', ThaiFontBold, isBold: true),
+                    _pdfRow('กำไรสุทธิ', formatCurrency.format(_profit), thaiFontBold, isBold: true),
                     pw.SizedBox(height: 10),
-                    _pdfRow('รายรับ', _selectedPeriod == 'monthly' ? '50,000' : '600,000', ThaiFontRegular),
-                    _pdfRow('รายจ่าย', _selectedPeriod == 'monthly' ? '15,000' : '180,000', ThaiFontRegular),
+                    _pdfRow('รายรับ', formatCurrency.format(_income), thaiFontRegular),
+                    _pdfRow('รายจ่าย', formatCurrency.format(_expense), thaiFontRegular),
                   ],
                 ),
               ),
               pw.SizedBox(height: 30),
-              pw.Text('หมายเหตุ: รายงานฉบับนี้สร้างขึ้นโดยระบบอัตโนมัติ', 
-                style: pw.TextStyle(font: ThaiFontRegular, fontSize: 10, color: PdfColors.grey600)),
+              pw.Text('หมายเหตุ: ข้อมูลจาก Application FarmAcc', 
+                style: pw.TextStyle(font: thaiFontRegular, fontSize: 10, color: PdfColors.grey600)),
             ],
           );
         },
       ),
     );
 
-    // แสดงหน้าต่าง Preview และสั่งพิมพ์/บันทึก
+    // สั่งพิมพ์หรือแชร์ไฟล์
     await Printing.layoutPdf(
       onLayout: (PdfPageFormat format) async => pdf.save(),
-      name: 'report_${_selectedPeriod}.pdf',
+      name: 'report_${_selectedYear}_$_selectedPeriod.pdf',
     );
   }
 
@@ -102,7 +176,7 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
         children: [
           pw.Text(label, style: pw.TextStyle(font: font, fontSize: isBold ? 16 : 14)),
-          pw.Text('฿$value', style: pw.TextStyle(font: font, fontSize: isBold ? 16 : 14)),
+          pw.Text('฿$value', style: pw.TextStyle(font: font, fontSize: isBold ? 16 : 14, color: label == 'รายจ่าย' ? PdfColors.red : PdfColors.black)),
         ],
       ),
     );
@@ -118,7 +192,9 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
     return Scaffold(
       backgroundColor: isDark ? backgroundDark : backgroundLight,
       appBar: _buildAppBar(isDark, cardBg, textMain),
-      body: _buildSummaryContent(isDark, cardBg, textMain, textSec),
+      body: _isLoading 
+        ? const Center(child: CircularProgressIndicator(color: primaryColor))
+        : _buildSummaryContent(isDark, cardBg, textMain, textSec),
     );
   }
 
@@ -142,12 +218,27 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
                       style: GoogleFonts.prompt(fontSize: 18, fontWeight: FontWeight.bold, color: textMain)),
                     Row(
                       children: [
-                        // ปุ่มส่งออก PDF
+                        // ปุ่ม PDF
                         IconButton(
                           icon: const Icon(Icons.picture_as_pdf, color: dangerColor), 
-                          onPressed: _exportToPdf,
+                          onPressed: _exportToPdf, // กดเพื่อสร้าง PDF
                         ),
-                        IconButton(icon: Icon(Icons.calendar_month, color: textMain), onPressed: () {}),
+                        // ปุ่มเลือกปี
+                        DropdownButtonHideUnderline(
+                          child: DropdownButton<int>(
+                            value: _selectedYear,
+                            dropdownColor: cardBg,
+                            icon: Icon(Icons.arrow_drop_down, color: textMain),
+                            style: GoogleFonts.prompt(color: textMain, fontWeight: FontWeight.bold),
+                            items: [2023, 2024, 2025, 2026, 2027].map((year) => DropdownMenuItem(value: year, child: Text('$year'))).toList(),
+                            onChanged: (val) {
+                              if (val != null) {
+                                setState(() => _selectedYear = val);
+                                _fetchData();
+                              }
+                            },
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -181,7 +272,10 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
     bool isSelected = _selectedPeriod == value;
     return Expanded(
       child: GestureDetector(
-        onTap: () => setState(() => _selectedPeriod = value),
+        onTap: () {
+          setState(() => _selectedPeriod = value);
+          _fetchData(); // โหลดข้อมูลใหม่เมื่อเปลี่ยน Tab
+        },
         child: Container(
           alignment: Alignment.center,
           decoration: BoxDecoration(
@@ -201,6 +295,7 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
   }
 
   Widget _buildSummaryContent(bool isDark, Color cardBg, Color textMain, Color textSec) {
+    final formatCurrency = NumberFormat('#,###');
     return SingleChildScrollView(
       padding: const EdgeInsets.only(bottom: 30),
       child: Column(
@@ -210,25 +305,24 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
             child: Column(
               children: [
                 Text(
-                  _selectedPeriod == 'monthly' ? 'ตุลาคม 2566' : 'ปีงบประมาณ 2566', 
+                  _selectedPeriod == 'monthly' ? 'เดือนปัจจุบัน ($_selectedYear)' : 'ปีงบประมาณ $_selectedYear', 
                   style: GoogleFonts.prompt(fontSize: 24, fontWeight: FontWeight.bold, color: textMain)
                 ),
                 Text(
-                  _selectedPeriod == 'monthly' ? 'ข้อมูลล่าสุด: 31 ต.ค. 2566' : 'รวมข้อมูลมกราคม - ธันวาคม', 
+                  _selectedPeriod == 'monthly' ? 'ข้อมูลเฉพาะเดือนนี้' : 'รวมข้อมูล ม.ค. - ธ.ค.', 
                   style: GoogleFonts.prompt(color: textSec, fontSize: 13)
                 ),
               ],
             ),
           ),
 
+          // แสดงข้อมูลตาม Tab ที่เลือก
           if (_selectedPeriod == 'monthly') ...[
-            _buildProfitCard(isDark, cardBg, textMain, textSec, "35,000", "50,000", "15,000"),
-            _buildRatioCard(isDark, cardBg, textMain, textSec, 0.75),
-            _buildDetailSection(isDark, cardBg, textMain, textSec),
+            _buildProfitCard(isDark, cardBg, textMain, textSec, formatCurrency.format(_profit), formatCurrency.format(_income), formatCurrency.format(_expense)),
+            _buildRatioCard(isDark, cardBg, textMain, textSec, (_income + _expense) == 0 ? 0 : _income / (_income + _expense)),
           ] else ...[
-            _buildProfitCard(isDark, cardBg, textMain, textSec, "420,000", "600,000", "180,000"),
+            _buildProfitCard(isDark, cardBg, textMain, textSec, formatCurrency.format(_profit), formatCurrency.format(_income), formatCurrency.format(_expense)),
             _buildYearlyChart(isDark, cardBg, textMain),
-            _buildQuarterlySection(isDark, cardBg, textMain, textSec),
           ],
         ],
       ),
@@ -250,7 +344,7 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
             style: GoogleFonts.prompt(color: textSec, fontSize: 14)),
           const SizedBox(height: 8),
           Text('฿$profit', 
-            style: GoogleFonts.notoSans(fontSize: 36, fontWeight: FontWeight.w900, color: primaryColor)),
+            style: GoogleFonts.notoSans(fontSize: 36, fontWeight: FontWeight.w900, color: _profit >= 0 ? primaryColor : dangerColor)),
           const Padding(padding: EdgeInsets.symmetric(vertical: 20), child: Divider()),
           Row(
             children: [
@@ -281,6 +375,10 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
   }
 
   Widget _buildYearlyChart(bool isDark, Color cardBg, Color textMain) {
+    // หาค่าสูงสุดเพื่อเทียบสัดส่วนกราฟ
+    double maxVal = 1;
+    _monthlyIncomeMap.forEach((_, val) { if(val > maxVal) maxVal = val; });
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(20),
@@ -291,14 +389,18 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('แนวโน้มผลประกอบการ', style: GoogleFonts.prompt(fontWeight: FontWeight.bold, color: textMain)),
+          Text('แนวโน้มรายรับ (ม.ค.-มิ.ย.)', style: GoogleFonts.prompt(fontWeight: FontWeight.bold, color: textMain)),
           const SizedBox(height: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              _buildBar(40, "ม.ค."), _buildBar(60, "ก.พ."), _buildBar(90, "มี.ค."),
-              _buildBar(50, "เม.ย."), _buildBar(70, "พ.ค."), _buildBar(100, "มิ.ย."),
+              _buildBar((_monthlyIncomeMap[1] ?? 0) / maxVal * 100, "ม.ค."),
+              _buildBar((_monthlyIncomeMap[2] ?? 0) / maxVal * 100, "ก.พ."),
+              _buildBar((_monthlyIncomeMap[3] ?? 0) / maxVal * 100, "มี.ค."),
+              _buildBar((_monthlyIncomeMap[4] ?? 0) / maxVal * 100, "เม.ย."),
+              _buildBar((_monthlyIncomeMap[5] ?? 0) / maxVal * 100, "พ.ค."),
+              _buildBar((_monthlyIncomeMap[6] ?? 0) / maxVal * 100, "มิ.ย."),
             ],
           ),
         ],
@@ -306,22 +408,24 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
     );
   }
 
-  Widget _buildBar(double height, String label) {
-  return Column(
-    children: [
-      Container(
-        width: 15, 
-        height: height,
-        decoration: BoxDecoration(
-          color: primaryColor.withOpacity(0.7), 
-          borderRadius: BorderRadius.circular(4),
+  Widget _buildBar(double heightPercentage, String label) {
+    // กำหนดความสูงขั้นต่ำ 2 เพื่อให้เห็นกราฟแม้ค่าน้อย
+    double h = heightPercentage < 2 ? 2 : heightPercentage;
+    return Column(
+      children: [
+        Container(
+          width: 15, 
+          height: h, // ความสูงตาม % ของยอดขาย
+          decoration: BoxDecoration(
+            color: primaryColor.withOpacity(0.7), 
+            borderRadius: BorderRadius.circular(4),
+          ),
         ),
-      ),
-      const SizedBox(height: 8), // ใส่ const ตรงนี้ได้เพราะเลข 8 ไม่เปลี่ยนแปลง
-      Text(label, style: const TextStyle(fontSize: 10, color: Colors.grey)), // ลบ const หน้า Text ออก
-    ],
-  );
-}
+        const SizedBox(height: 8), 
+        Text(label, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+      ],
+    );
+  }
 
   Widget _buildRatioCard(bool isDark, Color cardBg, Color textMain, Color textSec, double ratio) {
     return Container(
@@ -340,65 +444,10 @@ class _SummaryReportPageState extends State<SummaryReportPage> {
               minHeight: 12,
               backgroundColor: dangerColor,
               valueColor: const AlwaysStoppedAnimation<Color>(primaryColor),
-            )
+            ),
           ),
         ]
       ),
-    );
-  }
-
-  Widget _buildDetailSection(bool isDark, Color cardBg, Color textMain, Color textSec) {
-    return Column(children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12), 
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text('รายการล่าสุด', style: GoogleFonts.prompt(fontSize: 18, fontWeight: FontWeight.bold, color: textMain))
-        )
-      ),
-      Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(color: cardBg, borderRadius: BorderRadius.circular(16)),
-        child: Column(children: [
-          _buildDetailItem(Icons.agriculture, 'ขายผลผลิตลำไย', '15 ต.ค.', '+฿25,000', primaryColor),
-          const Divider(height: 1),
-          _buildDetailItem(Icons.water_drop, 'ค่าน้ำ/ค่าไฟฟาร์ม', '12 ต.ค.', '-฿5,000', dangerColor),
-        ]),
-      ),
-    ]);
-  }
-
-  Widget _buildQuarterlySection(bool isDark, Color cardBg, Color textMain, Color textSec) {
-    return Column(children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12), 
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Text('สรุปตามไตรมาส', style: GoogleFonts.prompt(fontSize: 18, fontWeight: FontWeight.bold, color: textMain))
-        )
-      ),
-      Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        decoration: BoxDecoration(color: cardBg, borderRadius: BorderRadius.circular(16)),
-        child: Column(children: [
-          _buildDetailItem(Icons.pie_chart, 'ไตรมาส 1 (ม.ค. - มี.ค.)', 'กำไรสะสม', '฿120,000', primaryColor),
-          const Divider(height: 1),
-          _buildDetailItem(Icons.pie_chart, 'ไตรมาส 2 (เม.ย. - มิ.ย.)', 'กำไรสะสม', '฿150,000', primaryColor),
-        ]),
-      ),
-    ]);
-  }
-
-  Widget _buildDetailItem(IconData icon, String title, String subtitle, String amount, Color color) {
-    return ListTile(
-      leading: Container(
-        padding: const EdgeInsets.all(8), 
-        decoration: BoxDecoration(color: color.withOpacity(0.1), shape: BoxShape.circle), 
-        child: Icon(icon, color: color, size: 20)
-      ),
-      title: Text(title, style: GoogleFonts.prompt(fontWeight: FontWeight.bold, fontSize: 14)),
-      subtitle: Text(subtitle, style: GoogleFonts.prompt(fontSize: 12, color: Colors.grey)),
-      trailing: Text(amount, style: GoogleFonts.notoSans(color: color, fontWeight: FontWeight.bold, fontSize: 15)),
     );
   }
 }

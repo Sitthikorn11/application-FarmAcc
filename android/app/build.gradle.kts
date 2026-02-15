@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -5,7 +8,11 @@ plugins {
     id("com.google.gms.google-services")
     id("dev.flutter.flutter-gradle-plugin")
 }
-
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
 android {
     namespace = "cpe.ict.up.simple"
     compileSdk = flutter.compileSdkVersion
